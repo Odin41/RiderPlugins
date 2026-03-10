@@ -1,0 +1,47 @@
+# ── Build output ─────────────────────────────────────────────────────────────
+build/
+out/
+*.zip
+
+# ── Gradle ───────────────────────────────────────────────────────────────────
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# ── IntelliJ / Rider IDE ─────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+*.ids
+atlassian-ide-plugin.xml
+
+# ── Plugin sandbox (downloaded Rider SDK, unpacked during build) ──────────────
+.pluginVerifier/
+.intellijPlatform/
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+# Don't ignore Dockerfile and docker-build.bat — they are part of the project
+*.dockerignore.local
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Windows ──────────────────────────────────────────────────────────────────
+$RECYCLE.BIN/
+*.lnk
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Kotlin / JVM ─────────────────────────────────────────────────────────────
+*.class
+*.kotlin_module
+
+# ── Local environment overrides ───────────────────────────────────────────────
+local.properties
+*.local.properties

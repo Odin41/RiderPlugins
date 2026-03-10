@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Фигурная скобка слева (зачёркнутая) -->
+  <text x="0" y="12" font-family="monospace" font-size="13" font-weight="bold" fill="#6B57FF">{</text>
+  <!-- Стрелка вправо -->
+  <path d="M6.5 8 L10.5 8 M9 6 L11 8 L9 10" stroke="#6B57FF" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Точка с запятой -->
+  <text x="11.5" y="12" font-family="monospace" font-size="13" font-weight="bold" fill="#6B57FF">;</text>
+</svg>

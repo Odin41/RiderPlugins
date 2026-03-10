@@ -1,0 +1,48 @@
+<idea-plugin>
+    <id>com.github.nsconverter.namespace-converter</id>
+    <n>C# Namespace Converter</n>
+    <version>1.0.0</version>
+    <vendor email="dev@example.com">Namespace Converter</vendor>
+
+    <description><![CDATA[
+        Converts C# block-scoped namespaces to file-scoped namespaces (C# 10 / .NET 6+).<br>
+        Adds "Namespace: Remove Curly Braces" to the context menu of .cs files.<br>
+        Supports multi-file selection in the project tree.<br><br>
+        Default shortcut: <b>Ctrl+Alt+Shift+N</b> (reassignable in Settings → Keymap).
+    ]]></description>
+
+    <idea-version since-build="252"/>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <actions>
+        <!-- ── Editor popup (right-click inside code) ── -->
+        <action id="com.github.nsconverter.ConvertNamespaceAction.editor"
+                class="com.github.nsconverter.ConvertNamespaceAction"
+                text="Namespace: Remove Curly Braces"
+                description="Convert block-scoped namespace to file-scoped namespace (C# 10+)"
+                icon="/icons/convertNamespace.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <!-- Default shortcut — reassignable in Settings → Keymap -->
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt shift N"/>
+        </action>
+
+        <!-- ── Project tree popup ── -->
+        <action id="com.github.nsconverter.ConvertNamespaceAction.project"
+                class="com.github.nsconverter.ConvertNamespaceAction"
+                text="Namespace: Remove Curly Braces"
+                description="Convert block-scoped namespace to file-scoped namespace (C# 10+)"
+                icon="/icons/convertNamespace.svg">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+
+        <!-- ── Editor tab popup ── -->
+        <action id="com.github.nsconverter.ConvertNamespaceAction.tab"
+                class="com.github.nsconverter.ConvertNamespaceAction"
+                text="Namespace: Remove Curly Braces"
+                description="Convert block-scoped namespace to file-scoped namespace (C# 10+)"
+                icon="/icons/convertNamespace.svg">
+            <add-to-group group-id="EditorTabPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

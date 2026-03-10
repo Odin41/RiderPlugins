@@ -1,0 +1,68 @@
+<idea-plugin>
+    <id>com.github.unusedmethods.analyzer</id>
+    <n>Unused Methods Analyzer</n>
+    <version>1.0.0</version>
+    <vendor>Unused Methods Analyzer</vendor>
+
+    <description><![CDATA[
+        Finds C# methods with zero usages across the entire project using IntelliJ
+        <b>ReferencesSearch</b> — the same engine Rider uses for "Find Usages".<br><br>
+        <b>Features:</b>
+        <ul>
+          <li>Full project scan or selected folder only</li>
+          <li>Background analysis with progress indicator</li>
+          <li>Sortable/filterable results list (NuGet-style tool window)</li>
+          <li>One-click navigation to any method</li>
+          <li>Mark as <code>[Obsolete]</code> directly from the list</li>
+          <li>Editor gutter badge per file</li>
+        </ul>
+        Shortcut: <b>Ctrl+Alt+Shift+U</b>
+    ]]></description>
+
+    <idea-version since-build="252"/>
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="Unused Methods"
+            anchor="bottom"
+            factoryClass="com.github.unusedmethods.UnusedMethodsToolWindowFactory"
+            icon="/icons/unusedMethods.svg"
+            canCloseContents="false"/>
+
+        <applicationService
+            serviceImplementation="com.github.unusedmethods.UnusedMethodsSettings"/>
+
+        <projectService
+            serviceImplementation="com.github.unusedmethods.UnusedMethodsService"/>
+
+        <codeInsight.lineMarkerProvider
+            language="any"
+            implementationClass="com.github.unusedmethods.UnusedMethodsGutterProvider"/>
+
+        <notificationGroup
+            id="Unused Methods Analyzer"
+            displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <!-- Analyze menu + keyboard shortcut -->
+        <action id="com.github.unusedmethods.RunAnalysis"
+                class="com.github.unusedmethods.RunAnalysisAction"
+                text="Analyze Unused Methods"
+                description="Scan entire project for unused C# methods"
+                icon="/icons/unusedMethods.svg">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt shift U"/>
+        </action>
+
+        <!-- Project tree right-click on directory -->
+        <action id="com.github.unusedmethods.AnalyzeFolder"
+                class="com.github.unusedmethods.AnalyzeFolderAction"
+                text="Analyze Unused Methods Here"
+                description="Scan selected folder for unused C# methods"
+                icon="/icons/unusedMethods.svg">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

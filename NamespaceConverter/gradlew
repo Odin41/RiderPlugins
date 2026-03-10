@@ -1,0 +1,3 @@
+#!/bin/sh
+# Gradle wrapper launcher for Linux/macOS/Docker
+exec java -jar "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"
