@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.github.unusedmethods.analyzer</id>
-    <n>Unused Methods Analyzer</n>
-    <version>1.0.0</version>
+    <name>Unused Methods Analyzer</name>
+    <version>1.0.1</version>
     <vendor>Unused Methods Analyzer</vendor>
 
     <description><![CDATA[

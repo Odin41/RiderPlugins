@@ -1,0 +1,38 @@
+<idea-plugin>
+    <id>com.github.namespacemover</id>
+    <name>Namespace Mover</name>
+    <version>1.0.1</version>
+    <vendor>Namespace Mover</vendor>
+
+    <description><![CDATA[
+        Automatically updates C# <b>namespace</b> declarations when a <code>.cs</code> file
+        is moved to a different folder in JetBrains Rider.<br><br>
+        <b>Features:</b>
+        <ul>
+          <li>Detects file move in the Project tree (drag &amp; drop or refactor)</li>
+          <li>Calculates new namespace from <code>RootNamespace</code> in <code>.csproj</code> + folder path</li>
+          <li>Supports both file-scoped (<code>namespace Foo.Bar;</code>) and block-scoped styles</li>
+          <li>Replaces all namespace declarations in the file</li>
+          <li>Confirmation dialog shows old → new namespace before making any changes</li>
+        </ul>
+    ]]></description>
+
+    <idea-version since-build="252"/>
+
+	<depends>com.intellij.modules.platform</depends>
+	<depends>com.intellij.modules.rider</depends>
+
+    <applicationListeners>
+    <listener
+        topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"
+        class="com.github.namespacemover.NamespaceMoverBulkListener"/>
+    </applicationListeners>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup
+            id="Namespace Mover"
+            displayType="BALLOON"/>
+    </extensions>
+
+    <actions/>
+</idea-plugin>

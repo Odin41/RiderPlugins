@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.11.0"
 }
 
-group = "com.github.nsconverter"
+group = "com.github.namespacemover"
 version = "1.0.1"
 
 repositories {
@@ -19,14 +19,11 @@ dependencies {
             useInstaller = false
         }
     }
-
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.1")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.1")
 }
 
 val javaVersion = JavaVersion.VERSION_21
-
 java {
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion
@@ -39,22 +36,11 @@ kotlin {
 }
 
 tasks {
-    test {
-        useJUnitPlatform()
-    }
+    test { useJUnitPlatform() }
+    buildSearchableOptions { enabled = false }
+    instrumentCode { enabled = false }
 
-    // Disabled: requires a running display (GUI) — not available in Docker/CI
-    buildSearchableOptions {
-        enabled = false
-    }
-
-    patchPluginXml {
-        sinceBuild.set("252")
-        untilBuild.set("253.*")
-        changeNotes.set("""
-            <ul>
-                <li>1.0.0 – Initial release: convert block-scoped namespace to file-scoped (C# 10+)</li>
-            </ul>
-        """.trimIndent())
-    }
+    // Disable patchPluginXml — it overwrites <name> tag with <n> during build.
+    // plugin.xml is managed manually and must not be modified by Gradle.
+    patchPluginXml { enabled = false }
 }

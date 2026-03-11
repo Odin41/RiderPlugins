@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.github.nsconverter.namespace-converter</id>
-    <n>C# Namespace Converter</n>
-    <version>1.0.0</version>
+    <name>C# Namespace Converter</name>
+    <version>1.0.1</version>
     <vendor email="dev@example.com">Namespace Converter</vendor>
 
     <description><![CDATA[
