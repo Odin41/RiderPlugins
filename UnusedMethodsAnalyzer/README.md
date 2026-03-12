@@ -1,20 +1,21 @@
 # Unused Methods Analyzer
 
-A JetBrains Rider plugin that finds C# methods with zero usages across your entire solution — using the same reference search engine Rider uses for **Find Usages**, extended with markup and text search to catch cases PSI alone would miss.
+A JetBrains Rider plugin that finds unused C# symbols across your entire solution — methods, properties, classes, interfaces, and enums — using the same reference search engine Rider uses for **Find Usages**, extended with markup and text search to catch cases PSI alone would miss.
 
 ---
 
 ## Features
 
 - **Full solution scan** or **selected folder only**
+- **Four symbol types** — methods, properties, classes, interfaces, and enums
 - **Three-tier reference detection** — no false positives from interface calls, generic methods, or Blazor/Razor event bindings
-- **Sortable, filterable results table** — filter by method name, class, or file simultaneously
-- **One-click navigation** — double-click or Enter to jump to any method in the editor
+- **Sortable, filterable results table** — filter by name, class, file, or symbol type simultaneously
+- **One-click navigation** — double-click or Enter to jump to any symbol in the editor
 - **Right-click context menu** — Go To, Mark \[Obsolete\], Copy name / signature
-- **Export results** to CSV (Excel-compatible) or TXT (grouped report)
+- **Export results** to CSV (Excel-compatible) or TXT (grouped report by symbol type)
 - **Persistent results** — last analysis is restored automatically when you reopen the project
-- **Editor gutter markers** — files with unused methods are annotated in the gutter
-- **Mark as \[Obsolete\]** directly from the results list, with custom message
+- **Editor gutter markers** — files with unused symbols are annotated in the gutter
+- **Mark as \[Obsolete\]** directly from the results list, with custom message (methods only)
 
 ---
 
@@ -23,20 +24,30 @@ A JetBrains Rider plugin that finds C# methods with zero usages across your enti
 Analysis runs in three passes:
 
 **Pass 1 — Collect candidates**
-Walks the PSI tree of all `.cs` files and extracts method declarations. Names are resolved via a three-tier fallback: `PsiNamedElement` interface → reflection `getName()` → regex on element text. Constructors, destructors, and generated files (`.Designer.cs`, `.g.cs`) are excluded automatically.
+Walks the PSI tree of all `.cs` files and extracts declarations. Each symbol type uses a dedicated name-extraction strategy:
 
-**Pass 2 — Verify each method through three steps:**
+| Symbol | PSI type | Name extraction |
+|--------|----------|-----------------|
+| Method | `CSharpMethodDeclaration` | `PsiNamedElement` → reflection → method regex |
+| Property / Field | `CSharpPropertyDeclaration` | Property regex (`public T Name {`) |
+| Class / Struct | `CSharpClassDeclaration` | Type-declaration regex (`class Foo`) |
+| Interface | `CSharpInterfaceDeclaration` | Type-declaration regex (`interface IFoo`) |
+| Enum | `CSharpEnumDeclaration` | Type-declaration regex (`enum MyEnum`) |
+
+Constructors, destructors, and generated files (`.Designer.cs`, `.g.cs`) are excluded automatically.
+
+**Pass 2 — Verify each symbol through three steps:**
 
 | Step | What it checks | What it catches |
 |------|---------------|-----------------|
 | **A** PSI `ReferencesSearch` | Direct semantic references across the project | Direct calls, most usages |
-| **B** Markup text search | `.razor`, `.cshtml`, `.xaml` files | `OnValidSubmit="Method"`, `@onclick="_ref.Method"`, `nameof(Controller.Method)` |
-| **C** C# text search | All `.cs` files (word-boundary regex) | Interface dispatch `_service.Method()`, generic calls `GetError(arg)`, delegates, `nameof`, reflection strings |
+| **B** Markup text search | `.razor`, `.cshtml`, `.xaml` files | `OnValidSubmit="Method"`, `@onclick="_ref.Method"`, `nameof(...)` |
+| **C** C# text search | All `.cs` files (word-boundary regex) | Interface dispatch, generic calls, delegates, `nameof`, reflection strings |
 
-A method is reported as unused only if all three steps find zero references.
+A symbol is reported as unused only if all three steps find zero references.
 
 **Project discovery**
-The plugin parses the `.sln` file to find all referenced `.csproj` directories, including projects outside `basePath` (shared libraries, helper projects in sibling folders). This ensures extension methods and utilities from any project in the solution are analysed correctly.
+The plugin parses the `.sln` file to find all referenced `.csproj` directories, including projects outside `basePath` (shared libraries, helper projects in sibling folders).
 
 ---
 
@@ -64,22 +75,22 @@ The plugin parses the `.sln` file to find all referenced `.csproj` directories, 
 ### Analyze a specific folder
 Right-click any folder in the Project tree → **Analyze Unused Methods Here**
 
-### Navigate to a method
+### Navigate to a symbol
 Double-click a row, press **Enter**, or right-click → **Go To**.
 
 ### Filter results
-Use the three filter fields in the toolbar to narrow results by method name, class name, or file name. All filters work simultaneously (AND logic). Click **✕** to clear all filters.
+Use the filter fields in the toolbar to narrow results by name, class, file, or symbol type. All filters work simultaneously (AND logic). The **Type** dropdown lets you show only Methods, Properties, Classes, Interfaces, or Enums. Click **✕** to clear all filters.
 
 ### Sort results
 Click any column header to sort. Click again to reverse. A third click removes the sort. The **Line** column sorts numerically.
 
 ### Mark as \[Obsolete\]
-Select a method → click **Mark \[Obsolete\]** (or right-click → **Mark \[Obsolete\]**) → enter a message. The attribute is inserted above the method declaration and the method is removed from the results list.
+Select a method → click **Mark \[Obsolete\]** (or right-click → **Mark \[Obsolete\]**) → enter a message. The attribute is inserted above the method declaration and the method is removed from the results list. Only available for methods.
 
 ### Export
 Click **Export** in the toolbar and choose a format:
-- **CSV** — comma-separated, suitable for Excel or any spreadsheet tool
-- **TXT** — plain text report grouped by class, suitable for code review
+- **CSV** — comma-separated, includes a `Kind` column, suitable for Excel or any spreadsheet tool
+- **TXT** — plain text report grouped by symbol type, then by class, suitable for code review
 
 ---
 
@@ -87,20 +98,31 @@ Click **Export** in the toolbar and choose a format:
 
 Open **Settings** (⚙ icon in the toolbar) to configure:
 
+**Method options**
+
 | Option | Description |
 |--------|-------------|
 | \[Obsolete\] text | Default message inserted by Mark \[Obsolete\] |
-| Excluded names | Comma-separated method names to always ignore |
+| Excluded names | Comma-separated symbol names to always ignore |
 | Exclude private methods | Skip methods declared `private` |
 | Exclude override methods | Skip methods with `override` modifier |
-| Exclude event handlers | Skip methods whose name starts with `On` or matches common event handler patterns |
+| Exclude event handlers | Skip methods matching common event handler patterns |
 | Exclude test methods | Skip methods with `[Test]`, `[Fact]`, `[Theory]` attributes |
+
+**Symbol types to analyze**
+
+| Option | Description |
+|--------|-------------|
+| Analyze properties | Include property and field declarations |
+| Analyze classes | Include class and struct declarations |
+| Analyze interfaces | Include interface declarations |
+| Analyze enums | Include enum declarations |
 
 ---
 
 ## What Is Automatically Excluded
 
-The following are never reported as unused regardless of settings:
+The following are never reported regardless of settings:
 
 - Constructors and destructors
 - Methods with attributes: `[Obsolete]`, `[Test]`, `[Fact]`, `[Theory]`, `[UsedImplicitly]`, `[HttpGet/Post/Put/Delete/Patch]`, `[JSInvokable]`, `[Parameter]`, `[Inject]`
@@ -110,8 +132,9 @@ The following are never reported as unused regardless of settings:
 
 ## Known Limitations
 
-- **PSI search scope** is limited to what IntelliJ's `ReferencesSearch` can resolve from the Kotlin frontend. Calls that exist only in reflection strings (e.g. `Type.GetMethod("MethodName")`) are caught by text search only — no semantic validation.
-- **Dynamic dispatch** (e.g. calls through `dynamic` keyword) is not detected.
+- **PSI search scope** is limited to what IntelliJ's `ReferencesSearch` can resolve from the Kotlin frontend. Calls that exist only in reflection strings are caught by text search only — no semantic validation.
+- **Dynamic dispatch** (calls through the `dynamic` keyword) is not detected.
+- **Class/interface name extraction** relies on regex on PSI element text, since `CSharpClassDeclaration` does not implement `PsiNamedElement` in Rider. If a type name is not found, it appears as `Unknown` — check the PSI dump in idea.log.
 - Results **do not auto-refresh** when you edit code — re-run the analysis after making changes.
 
 ---
@@ -127,7 +150,7 @@ src/main/kotlin/com/github/unusedmethods/
 ├── UnusedMethodsGutterProvider.kt    # Editor gutter markers
 ├── RunAnalysisAction.kt              # Toolbar / shortcut action
 ├── AnalyzeFolderAction.kt            # Project tree context menu action
-└── MethodInfo.kt                     # Data class for a result entry
+└── MethodInfo.kt                     # Data class for a result entry (with SymbolKind)
 ```
 
 ---
