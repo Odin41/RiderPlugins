@@ -1,48 +1,46 @@
 # RiderPlugins
 
-Коллекция плагинов для JetBrains Rider.
+A collection of plugins for JetBrains Rider.
 
-Плагины разработаны для автоматизации рутинных задач при работе с C#-проектами.
-Проекты создаются с применением инструментов на основе искусственного интеллекта.
-
----
-
-## Плагины
-
-| Плагин | Описание |
-|--------|----------|
-| [NamespaceConverter](./NamespaceConverter) | Преобразует блочные пространства имён C# в файловые (block-scoped → file-scoped namespace) |
-| [UnusedMethodsAnalyzer](./UnusedMethodsAnalyzer) | Находит методы C# с нулевым количеством использований по всему решению |
+Developed to automate routine tasks when working with C# projects.
+Built with the assistance of AI-based tools.
 
 ---
 
-## Сборка
+## Plugins
 
-Каждый плагин собирается независимо через Docker:
+| Plugin | Description |
+|--------|-------------|
+| [NamespaceConverter](./NamespaceConverter) | Converts C# block-scoped namespaces to file-scoped namespaces |
+| [NamespaceMover](./NamespaceMover) | Automatically updates the namespace declaration when a `.cs` file is moved to a different folder |
+| [UnusedMethodsAnalyzer](./UnusedMethodsAnalyzer) | Finds unused C# symbols (methods, properties, classes, interfaces, enums) across the entire solution |
+
+---
+
+## Building
+
+Each plugin is built independently via Docker:
 
 ```bat
 cd UnusedMethodsAnalyzer
 docker-build.bat
 ```
 
-Подробности — в `README.md` внутри папки каждого плагина.
+See the `README.md` inside each plugin folder for details.
 
 ---
 
-## Лицензия
+## License
 
-Распространяется под лицензией **MIT**.
+Distributed under the **MIT License**.
 
-Вы можете свободно использовать, копировать, изменять и распространять данный код
-в личных и коммерческих целях при соблюдении одного условия:
+You are free to use, copy, modify, and distribute this code for personal and commercial purposes, subject to one condition:
 
-**При использовании кода или его частей необходимо указывать ссылку на первоисточник:**
+**When using this code or any part of it, you must include a reference to the original source:**
 ```
 https://github.com/Odin41/RiderPlugins
 ```
 
-Программное обеспечение предоставляется **«как есть»**, без каких-либо гарантий —
-явных или подразумеваемых. Авторы не несут ответственности за любой ущерб,
-возникший в результате использования данного кода.
+The software is provided **"as is"**, without warranty of any kind — express or implied. The authors are not liable for any damages arising from the use of this code.
 
-Полный текст лицензии: [LICENSE](./LICENSE)
+Full license text: [LICENSE](./LICENSE)
