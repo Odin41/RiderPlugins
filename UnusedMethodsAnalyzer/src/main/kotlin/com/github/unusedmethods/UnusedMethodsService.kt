@@ -3,14 +3,6 @@ package com.github.unusedmethods
 import com.intellij.openapi.components.*
 import com.intellij.openapi.project.Project
 
-/**
- * Project-level service that holds analysis results and persists them between
- * IDE restarts via IntelliJ's PersistentStateComponent mechanism.
- *
- * State is stored in .idea/unusedMethods.xml (or workspace.xml depending on
- * storages config). Only serialisable data (MethodInfo fields) is saved —
- * no PSI elements.
- */
 @Service(Service.Level.PROJECT)
 @State(
     name = "UnusedMethodsAnalyzer",
@@ -18,12 +10,8 @@ import com.intellij.openapi.project.Project
 )
 class UnusedMethodsService : PersistentStateComponent<UnusedMethodsService.PersistedState> {
 
-    // ── Persisted state (XML-serialisable) ────────────────────────────────────
+    // ── Persisted state ───────────────────────────────────────────────────────
 
-    /**
-     * Only primitive/String fields are serialised by IntelliJ's XmlSerializer.
-     * We store each MethodInfo as a flat PersistedMethod bean.
-     */
     data class PersistedMethod(
         @JvmField var name: String        = "",
         @JvmField var className: String   = "",
@@ -32,7 +20,8 @@ class UnusedMethodsService : PersistentStateComponent<UnusedMethodsService.Persi
         @JvmField var signature: String   = "",
         @JvmField var isPrivate: Boolean  = false,
         @JvmField var isStatic: Boolean   = false,
-        @JvmField var isOverride: Boolean = false
+        @JvmField var isOverride: Boolean = false,
+        @JvmField var kind: String        = "METHOD"
     )
 
     class PersistedState {
@@ -42,7 +31,7 @@ class UnusedMethodsService : PersistentStateComponent<UnusedMethodsService.Persi
         @JvmField var scannedMethods: Int    = 0
     }
 
-    // ── In-memory runtime state ───────────────────────────────────────────────
+    // ── Runtime state ─────────────────────────────────────────────────────────
 
     data class AnalysisState(
         val results: List<MethodInfo>  = emptyList(),
@@ -50,7 +39,9 @@ class UnusedMethodsService : PersistentStateComponent<UnusedMethodsService.Persi
         val message: String            = "",
         val scannedFiles: Int          = 0,
         val scannedMethods: Int        = 0
-    )
+    ) {
+        fun byKind(kind: SymbolKind) = results.filter { it.kind == kind }
+    }
 
     private var runtimeState = AnalysisState()
     private val listeners    = mutableListOf<(AnalysisState) -> Unit>()
@@ -71,7 +62,8 @@ class UnusedMethodsService : PersistentStateComponent<UnusedMethodsService.Persi
                 signature  = m.signature,
                 isPrivate  = m.isPrivate,
                 isStatic   = m.isStatic,
-                isOverride = m.isOverride
+                isOverride = m.isOverride,
+                kind       = m.kind.name
             )
         }.toMutableList()
         return ps
@@ -87,7 +79,8 @@ class UnusedMethodsService : PersistentStateComponent<UnusedMethodsService.Persi
                 signature  = p.signature,
                 isPrivate  = p.isPrivate,
                 isStatic   = p.isStatic,
-                isOverride = p.isOverride
+                isOverride = p.isOverride,
+                kind       = runCatching { SymbolKind.valueOf(p.kind) }.getOrDefault(SymbolKind.METHOD)
             )
         }
         runtimeState = AnalysisState(

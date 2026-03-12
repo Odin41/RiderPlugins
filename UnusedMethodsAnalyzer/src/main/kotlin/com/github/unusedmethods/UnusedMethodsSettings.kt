@@ -19,7 +19,12 @@ class UnusedMethodsSettings : PersistentStateComponent<UnusedMethodsSettings.Sta
         var excludeOverrides: Boolean = true,
         var excludeEventHandlers: Boolean = true,
         var excludeTests: Boolean = true,
-        var excludedNames: String = "Main,Dispose,ToString,GetHashCode,Equals,GetEnumerator"
+        var excludedNames: String = "Main,Dispose,ToString,GetHashCode,Equals,GetEnumerator",
+        // Symbol kind toggles
+        var analyzeProperties: Boolean = true,
+        var analyzeClasses: Boolean = true,
+        var analyzeInterfaces: Boolean = true,
+        var analyzeEnums: Boolean = true
     )
 
     private var myState = State()
@@ -27,12 +32,16 @@ class UnusedMethodsSettings : PersistentStateComponent<UnusedMethodsSettings.Sta
     override fun getState(): State = myState
     override fun loadState(s: State) { myState = s }
 
-    var obsoleteText: String        get() = myState.obsoleteText;        set(v) { myState.obsoleteText = v }
-    var excludePrivate: Boolean     get() = myState.excludePrivate;      set(v) { myState.excludePrivate = v }
-    var excludeOverrides: Boolean   get() = myState.excludeOverrides;    set(v) { myState.excludeOverrides = v }
-    var excludeEventHandlers: Boolean get() = myState.excludeEventHandlers; set(v) { myState.excludeEventHandlers = v }
-    var excludeTests: Boolean       get() = myState.excludeTests;        set(v) { myState.excludeTests = v }
-    var excludedNames: String       get() = myState.excludedNames;       set(v) { myState.excludedNames = v }
+    var obsoleteText: String          get() = myState.obsoleteText;          set(v) { myState.obsoleteText = v }
+    var excludePrivate: Boolean       get() = myState.excludePrivate;        set(v) { myState.excludePrivate = v }
+    var excludeOverrides: Boolean     get() = myState.excludeOverrides;      set(v) { myState.excludeOverrides = v }
+    var excludeEventHandlers: Boolean get() = myState.excludeEventHandlers;  set(v) { myState.excludeEventHandlers = v }
+    var excludeTests: Boolean         get() = myState.excludeTests;          set(v) { myState.excludeTests = v }
+    var excludedNames: String         get() = myState.excludedNames;         set(v) { myState.excludedNames = v }
+    var analyzeProperties: Boolean    get() = myState.analyzeProperties;     set(v) { myState.analyzeProperties = v }
+    var analyzeClasses: Boolean       get() = myState.analyzeClasses;        set(v) { myState.analyzeClasses = v }
+    var analyzeInterfaces: Boolean    get() = myState.analyzeInterfaces;     set(v) { myState.analyzeInterfaces = v }
+    var analyzeEnums: Boolean         get() = myState.analyzeEnums;          set(v) { myState.analyzeEnums = v }
 
     val excludedNamesList: List<String>
         get() = excludedNames.split(',').map { it.trim() }.filter { it.isNotEmpty() }

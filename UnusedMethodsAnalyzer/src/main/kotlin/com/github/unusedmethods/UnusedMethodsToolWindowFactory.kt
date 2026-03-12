@@ -47,9 +47,10 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private val tableModel  = ResultsTableModel()
     private val table       = JBTable(tableModel)
     private val sorter      = TableRowSorter(tableModel)
-    private val filterField = SearchTextField()   // method name
+    private val filterField = SearchTextField()   // symbol name
     private val classFilter = SearchTextField()   // class name
     private val fileFilter  = SearchTextField()   // file name
+    private val kindFilter  = JComboBox(arrayOf("All", "Method", "Property", "Class", "Interface", "Enum"))
     private val statusLabel = JBLabel("Press 'Analyze Project' or use Ctrl+Alt+Shift+U")
     private val scopeLabel  = JBLabel("")
     private val progressBar = JProgressBar().apply {
@@ -61,7 +62,7 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         background = UIUtil.getPanelBackground()
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
         border = JBUI.Borders.empty(8)
-        text = "Select a method to see its signature"
+        text = "Select a symbol to see its details"
     }
 
     private var allResults: List<MethodInfo> = emptyList()
@@ -127,7 +128,7 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         val obsoleteBtn = btn("Mark [Obsolete]", AllIcons.Actions.Annotate,
             "Insert [Obsolete] above selected method") { markSelectedObsolete() }
         val goBtn       = btn("Go To", AllIcons.Actions.Find,
-            "Navigate to selected method (Enter / double-click)") { navigateToSelected() }
+            "Navigate to selected symbol (Enter / double-click)") { navigateToSelected() }
         val exportBtn   = btn("Export", AllIcons.ToolbarDecorator.Export,
             "Export results to CSV or TXT") { showExportDialog() }
         val settingsBtn = JButton(AllIcons.General.Settings).apply {
@@ -146,9 +147,10 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         fun lbl(t: String) = JBLabel(t).apply {
             foreground = UIUtil.getLabelDisabledForeground()
         }
-        filterField.apply { preferredSize = Dimension(180, 26); toolTipText = "Filter by method name" }
-        classFilter.apply { preferredSize = Dimension(150, 26); toolTipText = "Filter by class name"  }
-        fileFilter.apply  { preferredSize = Dimension(150, 26); toolTipText = "Filter by file name"   }
+        filterField.apply { preferredSize = Dimension(160, 26); toolTipText = "Filter by name" }
+        classFilter.apply { preferredSize = Dimension(130, 26); toolTipText = "Filter by class name" }
+        fileFilter.apply  { preferredSize = Dimension(130, 26); toolTipText = "Filter by file name"  }
+        kindFilter.apply  { preferredSize = Dimension(100, 26); toolTipText = "Filter by symbol type" }
 
         val filterAdapter = object : DocumentAdapter() {
             override fun textChanged(e: DocumentEvent) { applyFilters() }
@@ -156,15 +158,20 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         filterField.addDocumentListener(filterAdapter)
         classFilter.addDocumentListener(filterAdapter)
         fileFilter.addDocumentListener(filterAdapter)
+        kindFilter.addActionListener { applyFilters() }
 
         val clearBtn = JButton("✕").apply {
             toolTipText = "Clear all filters"; isFocusable = false
             preferredSize = Dimension(26, 26)
-            addActionListener { filterField.text = ""; classFilter.text = ""; fileFilter.text = "" }
+            addActionListener {
+                filterField.text = ""; classFilter.text = ""; fileFilter.text = ""
+                kindFilter.selectedIndex = 0
+            }
         }
-        filterRow.add(lbl("Method:")); filterRow.add(filterField)
-        filterRow.add(lbl("Class:"));  filterRow.add(classFilter)
-        filterRow.add(lbl("File:"));   filterRow.add(fileFilter)
+        filterRow.add(lbl("Name:"));  filterRow.add(filterField)
+        filterRow.add(lbl("Class:")); filterRow.add(classFilter)
+        filterRow.add(lbl("File:"));  filterRow.add(fileFilter)
+        filterRow.add(lbl("Type:"));  filterRow.add(kindFilter)
         filterRow.add(clearBtn)
 
         toolbar.add(actionRow, BorderLayout.NORTH)
@@ -191,22 +198,22 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
             selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
             tableHeader.reorderingAllowed = false
 
-            // Sorting
             rowSorter = sorter
-            sorter.setComparator(3, compareBy<Any> { (it as? Int) ?: Int.MAX_VALUE })
+            sorter.setComparator(4, compareBy<Any> { (it as? Int) ?: Int.MAX_VALUE })
             sorter.sortKeys = listOf(RowSorter.SortKey(0, SortOrder.ASCENDING))
             tableHeader.defaultRenderer = SortableHeaderRenderer(tableHeader.defaultRenderer)
 
-            // Register renderer for ALL column types to prevent colour bleed
-            setDefaultRenderer(String::class.java, MethodCellRenderer())
-            setDefaultRenderer(Int::class.java,    MethodCellRenderer())
-            setDefaultRenderer(Any::class.java,    MethodCellRenderer())
+            setDefaultRenderer(String::class.java, SymbolCellRenderer())
+            setDefaultRenderer(Int::class.java,    SymbolCellRenderer())
+            setDefaultRenderer(Any::class.java,    SymbolCellRenderer())
 
-            columnModel.getColumn(0).preferredWidth = 180
-            columnModel.getColumn(1).preferredWidth = 140
-            columnModel.getColumn(2).preferredWidth = 180
-            columnModel.getColumn(3).preferredWidth = 55
-            columnModel.getColumn(4).preferredWidth = 70
+            // Col: Kind, Name, Class, File, Line, Access
+            columnModel.getColumn(0).preferredWidth = 80
+            columnModel.getColumn(1).preferredWidth = 170
+            columnModel.getColumn(2).preferredWidth = 130
+            columnModel.getColumn(3).preferredWidth = 170
+            columnModel.getColumn(4).preferredWidth = 50
+            columnModel.getColumn(5).preferredWidth = 65
 
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
@@ -233,18 +240,20 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         if (!e.isPopupTrigger) return
         val row = table.rowAtPoint(e.point)
         if (row >= 0) table.setRowSelectionInterval(row, row)
-        val m = selectedMethod() ?: return
+        val m = selectedSymbol() ?: return
 
         JPopupMenu().apply {
             add(JMenuItem("Go To   ${m.fileName}:${m.lineNumber}", AllIcons.Actions.Find)
                 .also { it.addActionListener { navigateToSelected() } })
             addSeparator()
-            add(JMenuItem("Mark [Obsolete]", AllIcons.Actions.Annotate)
-                .also { it.addActionListener { markSelectedObsolete() } })
-            addSeparator()
-            add(JMenuItem("Copy Method Name")
+            if (m.kind == SymbolKind.METHOD) {
+                add(JMenuItem("Mark [Obsolete]", AllIcons.Actions.Annotate)
+                    .also { it.addActionListener { markSelectedObsolete() } })
+                addSeparator()
+            }
+            add(JMenuItem("Copy Name")
                 .also { it.addActionListener { copyToClipboard(m.name) } })
-            add(JMenuItem("Copy Class.Method")
+            add(JMenuItem("Copy Display Name")
                 .also { it.addActionListener { copyToClipboard(m.displayName) } })
             add(JMenuItem("Copy Full Signature")
                 .also { it.addActionListener { copyToClipboard(m.signature) } })
@@ -266,8 +275,8 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             project,
-            if (dirOverride == null) "Analyzing project for unused methods…"
-            else "Analyzing '${dirOverride.name}' for unused methods…",
+            if (dirOverride == null) "Analyzing project for unused symbols…"
+            else "Analyzing '${dirOverride.name}' for unused symbols…",
             true
         ) {
             override fun run(indicator: ProgressIndicator) {
@@ -295,11 +304,13 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         val nameQ  = filterField.text.trim()
         val classQ = classFilter.text.trim()
         val fileQ  = fileFilter.text.trim()
+        val kindQ  = kindFilter.selectedItem?.toString() ?: "All"
 
         val filtered = allResults.filter { m ->
-            (nameQ.isBlank()  || m.name.contains(nameQ,  ignoreCase = true)) &&
+            (nameQ.isBlank()  || m.name.contains(nameQ,      ignoreCase = true)) &&
             (classQ.isBlank() || m.className.contains(classQ, ignoreCase = true)) &&
-            (fileQ.isBlank()  || m.fileName.contains(fileQ,  ignoreCase = true))
+            (fileQ.isBlank()  || m.fileName.contains(fileQ,   ignoreCase = true)) &&
+            (kindQ == "All"   || m.kind.label == kindQ)
         }
         tableModel.setData(filtered)
     }
@@ -307,35 +318,49 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
     // ── Status ────────────────────────────────────────────────────────────────
 
     private fun updateStatus(state: UnusedMethodsService.AnalysisState) {
-        val count = state.results.size
-        statusLabel.text = when (count) {
-            0    -> "✓ No unused methods found"
-            1    -> "1 unused method"
-            else -> "$count unused methods"
+        val total   = state.results.size
+        val methods = state.results.count { it.kind == SymbolKind.METHOD }
+        val props   = state.results.count { it.kind == SymbolKind.PROPERTY }
+        val classes = state.results.count { it.kind == SymbolKind.CLASS }
+        val ifaces  = state.results.count { it.kind == SymbolKind.INTERFACE }
+        val enums   = state.results.count { it.kind == SymbolKind.ENUM }
+
+        statusLabel.text = when (total) {
+            0    -> "✓ No unused symbols found"
+            1    -> "1 unused symbol"
+            else -> buildString {
+                append("$total unused:")
+                if (methods > 0) append(" $methods methods")
+                if (props   > 0) append(", $props props")
+                if (classes > 0) append(", $classes classes")
+                if (ifaces  > 0) append(", $ifaces interfaces")
+                if (enums   > 0) append(", $enums enums")
+            }
         }
         scopeLabel.text = buildString {
             append("Scope: ${state.scope}")
             if (state.scannedFiles   > 0) append(" · ${state.scannedFiles} files")
-            if (state.scannedMethods > 0) append(" · ${state.scannedMethods} methods scanned")
+            if (state.scannedMethods > 0) append(" · ${state.scannedMethods} scanned")
         }
     }
 
     // ── Navigation ────────────────────────────────────────────────────────────
 
     private fun navigateToSelected() {
-        val m  = selectedMethod() ?: return
+        val m  = selectedSymbol() ?: return
         val vf = LocalFileSystem.getInstance().findFileByPath(m.filePath) ?: return
         OpenFileDescriptor(project, vf, m.lineNumber - 1, 0).navigate(true)
     }
 
     private fun updateDetailPanel() {
-        val m = selectedMethod()
+        val m = selectedSymbol()
         detailArea.text = m?.let {
             buildString {
-                appendLine("Method :  ${it.name}")
-                appendLine("Class  :  ${it.className}")
-                appendLine("File   :  ${it.fileName}")
-                appendLine("Line   :  ${it.lineNumber}")
+                appendLine("Kind    :  ${it.kind.label}")
+                appendLine("Name    :  ${it.name}")
+                if (it.className.isNotEmpty()) appendLine("Class   :  ${it.className}")
+                appendLine("File    :  ${it.fileName}")
+                appendLine("Line    :  ${it.lineNumber}")
                 appendLine()
                 appendLine("Signature:")
                 appendLine(it.signature)
@@ -346,15 +371,19 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
                 )
                 if (flags.isNotEmpty()) { appendLine(); append("Flags: ${flags.joinToString(", ")}") }
             }
-        } ?: "Select a method to see its signature"
+        } ?: "Select a symbol to see its details"
         detailArea.caretPosition = 0
     }
 
-    // ── Mark obsolete ─────────────────────────────────────────────────────────
+    // ── Mark obsolete (methods only) ──────────────────────────────────────────
 
     private fun markSelectedObsolete() {
-        val m = selectedMethod() ?: run {
+        val m = selectedSymbol() ?: run {
             Messages.showInfoMessage(project, "Select a method first.", "Mark [Obsolete]")
+            return
+        }
+        if (m.kind != SymbolKind.METHOD) {
+            Messages.showInfoMessage(project, "[Obsolete] can only be applied to methods.", "Mark [Obsolete]")
             return
         }
         val settings = UnusedMethodsSettings.getInstance()
@@ -402,7 +431,7 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
             dialogTitle = "Save export file"
             selectedFile = File(
                 project.basePath ?: System.getProperty("user.home"),
-                if (choice == 0) "unused_methods.csv" else "unused_methods.txt"
+                if (choice == 0) "unused_symbols.csv" else "unused_symbols.txt"
             )
         }
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return
@@ -410,7 +439,7 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
         try {
             if (choice == 0) exportCsv(chooser.selectedFile)
             else             exportTxt(chooser.selectedFile)
-            notify("Exported ${allResults.size} methods to ${chooser.selectedFile.name}",
+            notify("Exported ${allResults.size} symbols to ${chooser.selectedFile.name}",
                 NotificationType.INFORMATION)
         } catch (ex: Exception) {
             notify("Export failed: ${ex.message}", NotificationType.ERROR)
@@ -419,12 +448,12 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
     private fun exportCsv(file: File) {
         file.bufferedWriter().use { w ->
-            w.write("Method,Class,File,Line,Access,Signature\n")
+            w.write("Kind,Name,Class,File,Line,Access,Signature\n")
             allResults.forEach { m ->
                 val access = when { m.isPrivate -> "private"; m.isStatic -> "static"
                                     m.isOverride -> "override"; else -> "public" }
                 fun esc(s: String) = "\"${s.replace("\"", "\"\"")}\""
-                w.write("${esc(m.name)},${esc(m.className)},${esc(m.fileName)}," +
+                w.write("${m.kind.label},${esc(m.name)},${esc(m.className)},${esc(m.fileName)}," +
                         "${m.lineNumber},$access,${esc(m.signature)}\n")
             }
         }
@@ -432,15 +461,21 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
     private fun exportTxt(file: File) {
         file.bufferedWriter().use { w ->
-            w.write("Unused Methods Report\n")
+            w.write("Unused Symbols Report\n")
             w.write("Generated: ${java.time.LocalDateTime.now()}\n")
-            w.write("Total: ${allResults.size} unused methods\n")
+            w.write("Total: ${allResults.size} unused symbols\n")
             w.write("=".repeat(72) + "\n\n")
-            allResults.groupBy { it.className }.toSortedMap().forEach { (cls, methods) ->
-                w.write("▸ $cls\n")
-                methods.sortedBy { it.name }.forEach { m ->
-                    w.write("    ${m.name}  (${m.fileName}:${m.lineNumber})\n")
-                    w.write("    ${m.signature}\n\n")
+
+            SymbolKind.values().forEach { kind ->
+                val group = allResults.filter { it.kind == kind }
+                if (group.isEmpty()) return@forEach
+                w.write("━━━ ${kind.label}s (${group.size}) ━━━\n\n")
+                group.groupBy { it.className.ifEmpty { it.fileName } }.toSortedMap().forEach { (cls, items) ->
+                    if (cls.isNotEmpty()) w.write("▸ $cls\n")
+                    items.sortedBy { it.name }.forEach { m ->
+                        w.write("    ${m.name}  (${m.fileName}:${m.lineNumber})\n")
+                        w.write("    ${m.signature}\n\n")
+                    }
                 }
             }
         }
@@ -459,7 +494,7 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun selectedMethod(): MethodInfo? {
+    private fun selectedSymbol(): MethodInfo? {
         val viewRow = table.selectedRow.takeIf { it >= 0 } ?: return null
         return tableModel.getAt(table.convertRowIndexToModel(viewRow))
     }
@@ -483,10 +518,10 @@ class UnusedMethodsPanel(private val project: Project) : JPanel(BorderLayout()) 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Table model
+//  Table model  — columns: Kind | Name | Class | File | Line | Access
 // ─────────────────────────────────────────────────────────────────────────────
 class ResultsTableModel : AbstractTableModel() {
-    private val COLS = arrayOf("Method", "Class", "File", "Line", "Access")
+    private val COLS = arrayOf("Kind", "Name", "Class", "File", "Line", "Access")
     private var rows: List<MethodInfo> = emptyList()
 
     fun setData(list: List<MethodInfo>) { rows = list; fireTableDataChanged() }
@@ -498,30 +533,40 @@ class ResultsTableModel : AbstractTableModel() {
     override fun isCellEditable(r: Int, c: Int) = false
 
     override fun getColumnClass(col: Int): Class<*> = when (col) {
-        3    -> Int::class.java
+        4    -> Int::class.java
         else -> String::class.java
     }
 
     override fun getValueAt(row: Int, col: Int): Any = rows[row].run {
         when (col) {
-            0 -> name; 1 -> className; 2 -> fileName; 3 -> lineNumber
-            4 -> when { isPrivate -> "private"; isStatic -> "static"
-                        isOverride -> "override"; else -> "public" }
+            0 -> kind.label
+            1 -> name
+            2 -> className
+            3 -> fileName
+            4 -> lineNumber
+            5 -> when { isPrivate -> "private"; isStatic -> "static"
+                         isOverride -> "override"; else -> "public" }
             else -> ""
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Cell renderer  — colour reset on every cell prevents bleed between columns
+//  Cell renderer
 // ─────────────────────────────────────────────────────────────────────────────
-class MethodCellRenderer : DefaultTableCellRenderer() {
+class SymbolCellRenderer : DefaultTableCellRenderer() {
     private val altBg         = UIUtil.getDecoratedRowColor()
     private val boldFont      = UIManager.getFont("Label.font")?.deriveFont(Font.BOLD)
     private val monoFont      = Font(Font.MONOSPACED, Font.PLAIN, 12)
     private val privateColor  = JBColor(Color(130,  90, 180), Color(180, 140, 220))
     private val staticColor   = JBColor(Color(  0, 120, 180), Color(100, 180, 230))
     private val overrideColor = JBColor(Color( 90, 150,  90), Color(130, 190, 130))
+    // Kind badge colors
+    private val kindMethodColor    = JBColor(Color( 60, 130, 200), Color( 80, 160, 230))
+    private val kindPropertyColor  = JBColor(Color( 90, 165,  90), Color(110, 190, 110))
+    private val kindClassColor     = JBColor(Color(200, 130,  40), Color(230, 160,  60))
+    private val kindInterfaceColor = JBColor(Color(170,  60, 170), Color(200,  90, 200))
+    private val kindEnumColor      = JBColor(Color(150,  90,  40), Color(190, 130,  70))
 
     override fun getTableCellRendererComponent(
         table: JTable, value: Any?, isSelected: Boolean,
@@ -531,21 +576,27 @@ class MethodCellRenderer : DefaultTableCellRenderer() {
 
         border = JBUI.Borders.empty(0, 6)
 
-        // Background — always reset to prevent zebra bleed on sort/filter
         background = when {
             isSelected   -> table.selectionBackground
             row % 2 == 0 -> table.background
             else         -> altBg
         }
 
-        // Foreground — reset to default first, then apply per-column overrides
         foreground = if (isSelected) table.selectionForeground else table.foreground
 
-        font = when (col) { 0 -> boldFont ?: table.font; 3 -> monoFont; else -> table.font }
+        font = when (col) { 1 -> boldFont ?: table.font; 4 -> monoFont; else -> table.font }
 
         if (!isSelected) when (col) {
-            3 -> foreground = UIUtil.getLabelDisabledForeground()
-            4 -> foreground = when (value?.toString()) {
+            0 -> foreground = when (value?.toString()) {
+                "Method"    -> kindMethodColor
+                "Property"  -> kindPropertyColor
+                "Class"     -> kindClassColor
+                "Interface" -> kindInterfaceColor
+                "Enum"      -> kindEnumColor
+                else        -> table.foreground
+            }
+            4 -> foreground = UIUtil.getLabelDisabledForeground()
+            5 -> foreground = when (value?.toString()) {
                 "private"  -> privateColor
                 "static"   -> staticColor
                 "override" -> overrideColor
@@ -585,12 +636,16 @@ class SortableHeaderRenderer(private val delegate: TableCellRenderer?) : TableCe
 class SettingsDialog(project: Project) : com.intellij.openapi.ui.DialogWrapper(project, true) {
 
     private val s = UnusedMethodsSettings.getInstance()
-    val obsoleteField = JTextField(s.obsoleteText, 36)
-    val excludedField = JTextField(s.excludedNames, 36)
-    val privateBox    = JCheckBox("Exclude private methods",    s.excludePrivate)
-    val overrideBox   = JCheckBox("Exclude override methods",   s.excludeOverrides)
-    val eventBox      = JCheckBox("Exclude event handlers",     s.excludeEventHandlers)
-    val testBox       = JCheckBox("Exclude test methods",       s.excludeTests)
+    val obsoleteField  = JTextField(s.obsoleteText, 36)
+    val excludedField  = JTextField(s.excludedNames, 36)
+    val privateBox     = JCheckBox("Exclude private methods",    s.excludePrivate)
+    val overrideBox    = JCheckBox("Exclude override methods",   s.excludeOverrides)
+    val eventBox       = JCheckBox("Exclude event handlers",     s.excludeEventHandlers)
+    val testBox        = JCheckBox("Exclude test methods",       s.excludeTests)
+    val propsBox       = JCheckBox("Analyze properties",         s.analyzeProperties)
+    val classesBox     = JCheckBox("Analyze classes",            s.analyzeClasses)
+    val interfacesBox  = JCheckBox("Analyze interfaces",         s.analyzeInterfaces)
+    val enumsBox       = JCheckBox("Analyze enums",              s.analyzeEnums)
 
     init { title = "Unused Methods Analyzer — Settings"; init() }
 
@@ -608,9 +663,20 @@ class SettingsDialog(project: Project) : com.intellij.openapi.ui.DialogWrapper(p
             g.gridx = 0; g.gridy = y; g.gridwidth = 2; g.weightx = 1.0; panel.add(comp, g)
             g.gridwidth = 1
         }
+        fun sep(y: Int, title: String) {
+            g.gridx = 0; g.gridy = y; g.gridwidth = 2; g.weightx = 1.0
+            panel.add(JBLabel(title).apply {
+                foreground = UIUtil.getLabelDisabledForeground()
+                border = JBUI.Borders.emptyTop(6)
+            }, g)
+            g.gridwidth = 1
+        }
         row(0, "[Obsolete] text:", obsoleteField)
         row(1, "Excluded names (comma-separated):", excludedField)
-        span(2, privateBox); span(3, overrideBox); span(4, eventBox); span(5, testBox)
+        sep(2, "— Methods ——————————————————————————")
+        span(3, privateBox); span(4, overrideBox); span(5, eventBox); span(6, testBox)
+        sep(7,  "— Symbol types to analyze ——————————")
+        span(8,  propsBox); span(9, classesBox); span(10, interfacesBox); span(11, enumsBox)
         return panel
     }
 
@@ -621,5 +687,9 @@ class SettingsDialog(project: Project) : com.intellij.openapi.ui.DialogWrapper(p
         s.excludeOverrides     = overrideBox.isSelected
         s.excludeEventHandlers = eventBox.isSelected
         s.excludeTests         = testBox.isSelected
+        s.analyzeProperties    = propsBox.isSelected
+        s.analyzeClasses       = classesBox.isSelected
+        s.analyzeInterfaces    = interfacesBox.isSelected
+        s.analyzeEnums         = enumsBox.isSelected
     }
 }

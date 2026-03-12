@@ -27,9 +27,6 @@ object CSharpAnalyzer {
         "bin", "obj", ".git", ".vs", "node_modules", ".idea", "packages", "Migrations"
     )
 
-    // Matches C# method declaration first line, captures method name.
-    // e.g. "public override void OnActionExecuting(" → "OnActionExecuting"
-    //      "private async Task<bool> OnSubmitAsync(" → "OnSubmitAsync"
     private val METHOD_NAME_REGEX = Regex(
         """^[\s]*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed|extern|unsafe|partial|new)\s+)+""" +
         """(?:[\w<>\[\],.\s?]+?\s+)""" +
@@ -38,12 +35,55 @@ object CSharpAnalyzer {
 
     private val METHOD_NAME_FALLBACK = Regex("""(\w+)\s*[(<]""")
 
-    // Attributes that imply implicit usage — methods with these should be skipped
     private val IMPLICIT_USE_ATTRIBUTES = setOf(
         "UsedImplicitly", "ApiExplorerSettings", "HttpGet", "HttpPost", "HttpPut",
         "HttpDelete", "HttpPatch", "Route", "Authorize", "AllowAnonymous",
         "JSInvokable", "Parameter", "Inject", "OneWay", "TwoWay", "CascadingParameter"
     )
+
+    // ── PSI type sets ─────────────────────────────────────────────────────────
+
+    private val METHOD_PSI_TYPES = setOf(
+        "CSharpMethodDeclaration",
+        "CSharpMethodDeclarationImpl",
+        "CSharpConstructorDeclaration",
+        "CSharpConstructorDeclarationImpl",
+        "CSharpDestructorDeclaration",
+        "CSharpDestructorDeclarationImpl"
+    )
+
+    private val PROPERTY_PSI_TYPES = setOf(
+        "CSharpPropertyDeclaration",
+        "CSharpPropertyDeclarationImpl",
+        "CSharpFieldDeclaration",
+        "CSharpFieldDeclarationImpl"
+    )
+
+    private val CLASS_PSI_TYPES = setOf(
+        "CSharpClassDeclaration",
+        "CSharpClassDeclarationImpl"
+    )
+
+    private val INTERFACE_PSI_TYPES = setOf(
+        "CSharpInterfaceDeclaration",
+        "CSharpInterfaceDeclarationImpl"
+    )
+
+    private val ENUM_PSI_TYPES = setOf(
+        "CSharpEnumDeclaration",
+        "CSharpEnumDeclarationImpl"
+    )
+
+    private fun symbolKindFor(typeName: String): SymbolKind? = when {
+        typeName in METHOD_PSI_TYPES    -> SymbolKind.METHOD
+        typeName in PROPERTY_PSI_TYPES  -> SymbolKind.PROPERTY
+        typeName in CLASS_PSI_TYPES     -> SymbolKind.CLASS
+        typeName in INTERFACE_PSI_TYPES -> SymbolKind.INTERFACE
+        typeName in ENUM_PSI_TYPES      -> SymbolKind.ENUM
+        else                            -> null
+    }
+
+    private fun isSymbolLike(typeName: String) = symbolKindFor(typeName) != null
 
     // ── Public entry points ───────────────────────────────────────────────────
 
@@ -51,7 +91,6 @@ object CSharpAnalyzer {
         val scope = GlobalSearchScope.projectScope(project)
         val files = collectCsFiles(project, null)
         val markupFiles = collectMarkupFiles(project, null)
-        // For cs text search: use ALL cs files in project (not just the analyzed ones)
         return analyzeFiles(project, files, markupFiles, files, scope, indicator)
     }
 
@@ -62,7 +101,6 @@ object CSharpAnalyzer {
     ): AnalysisResult {
         val files = collectCsFiles(project, directory)
         val markupFiles = collectMarkupFiles(project, directory)
-        // For cs text search: use whole project scope (callers may be outside selected dir)
         val allCsFiles = collectCsFiles(project, null)
         return analyzeFiles(project, files, markupFiles, allCsFiles, GlobalSearchScope.projectScope(project), indicator, directory)
     }
@@ -99,23 +137,17 @@ object CSharpAnalyzer {
         debug.appendLine("Files found: ${files.size}, markup files: ${markupFiles.size}")
         LOG.info("UnusedMethods: ${files.size} .cs files, ${markupFiles.size} markup files")
 
-        // Pre-load markup content for fast text-search in Pass 2
         indicator.text = "Loading markup files..."
         val markupContent = buildMarkupIndex(markupFiles)
-        debug.appendLine("Markup index: ${markupContent.size} files loaded")
 
-        // Build cs text index for fallback reference check.
-        // Covers: generic method calls GetError(...), interface method calls via variable,
-        // delegate assignments, reflection strings, and any other case PSI misses.
         indicator.text = "Building C# text index..."
         val csTextIndex = buildCsTextIndex(allCsFiles, files)
-        debug.appendLine("C# text index: ${csTextIndex.size} files indexed")
 
         val settings = UnusedMethodsSettings.getInstance()
         val psiManager = PsiManager.getInstance(project)
-        val candidates = CopyOnWriteArrayList<CsMethodElement>()
+        val candidates = CopyOnWriteArrayList<CsSymbolElement>()
 
-        // ── Pass 1: collect PSI method declarations ───────────────────────────
+        // ── Pass 1: collect PSI declarations ─────────────────────────────────
         indicator.text = "Reading PSI declarations..."
         indicator.isIndeterminate = false
         var diagnosticDone = false
@@ -131,7 +163,7 @@ object CSharpAnalyzer {
                     diagnosticDone = true
                     dumpPsiTree(psiFile, debug)
                 }
-                collectMethodElements(psiFile, settings, candidates)
+                collectSymbolElements(psiFile, settings, candidates)
             }
         }
 
@@ -141,43 +173,33 @@ object CSharpAnalyzer {
         LOG.info("UnusedMethods: Pass1 done — ${candidates.size} candidates")
 
         if (candidates.isEmpty()) {
-            val msg = "0 method declarations found. See Help > Show Log for PSI dump."
+            val msg = "0 declarations found. See Help > Show Log for PSI dump."
             return AnalysisResult(emptyList(), msg, scannedFiles = files.size, debugInfo = debug.toString())
         }
 
         // ── Pass 2: check references ──────────────────────────────────────────
-        // ReferencesSearch requires smart mode (indices must be ready).
         indicator.text = "Waiting for indices..."
         DumbService.getInstance(project).waitForSmartMode()
 
-        indicator.text = "Checking references (${candidates.size} methods)..."
+        indicator.text = "Checking references (${candidates.size} symbols)..."
         indicator.fraction = 0.40
 
-        val unusedMethods = CopyOnWriteArrayList<MethodInfo>()
-        val totalMethods  = candidates.size
-        val doneMethods   = AtomicInteger(0)
+        val unusedSymbols = CopyOnWriteArrayList<MethodInfo>()
+        val totalSymbols  = candidates.size
+        val doneSymbols   = AtomicInteger(0)
 
-        // Single thread to avoid read-lock deadlocks with ReferencesSearch
         val executor = Executors.newSingleThreadExecutor()
 
         candidates.forEach { candidate ->
             executor.submit {
                 if (indicator.isCanceled) return@submit
-                val done = doneMethods.incrementAndGet()
+                val done = doneSymbols.incrementAndGet()
                 if (done % 20 == 0) {
-                    indicator.fraction = 0.40 + 0.55 * done / totalMethods
-                    indicator.text2 = "${candidate.className}.${candidate.name} ($done/$totalMethods)"
+                    indicator.fraction = 0.40 + 0.55 * done / totalSymbols
+                    indicator.text2 = "${candidate.className}.${candidate.name} ($done/$totalSymbols)"
                 }
 
                 // ── Step A: PSI ReferencesSearch ──────────────────────────────
-                // IntelliJ's ReferencesSearch is the only PSI-level search available
-                // from Kotlin in Rider. ReSharper's IFinder lives in the C# backend
-                // process and is not callable from Kotlin directly.
-                //
-                // ignoreAccessScope=true is critical: it tells the search to cross
-                // visibility boundaries, which is necessary for finding calls through
-                // interfaces (IBankPaymentService.InitPaymentAsync) and for private
-                // methods called from nested/partial classes.
                 val psiUsageCount = try {
                     ReadAction.compute<Int, Exception> {
                         if (!candidate.element.isValid) return@compute -1
@@ -195,21 +217,10 @@ object CSharpAnalyzer {
                 }
                 if (psiUsageCount > 0) return@submit
 
-                // ── Step B: markup text search ───────────────────────────────
-                // razor/cshtml/xaml event attributes: OnValidSubmit="MethodName"
+                // ── Step B: markup text search ────────────────────────────────
                 if (isUsedInMarkup(candidate.name, markupContent)) return@submit
 
-                // ── Step C: C# text search (last resort) ─────────────────────
-                // Catches what PSI misses due to Rider frontend/backend split:
-                //   - Generic methods:    GetError(arg) declared as GetError<T>(...)
-                //   - Interface dispatch: bankService.InitPaymentAsync(...)
-                //   - Delegates:          action = MethodName
-                //   - nameof/reflection:  nameof(MethodName), "MethodName"
-                //
-                // False-positive protection:
-                //   - Word boundaries: "GetError" won't match "GetErrorCount"
-                //   - Short names (≤5 chars): requires call syntax Name( or Name<
-                //   - Declaring file: requires ≥2 occurrences (decl + usage)
+                // ── Step C: C# text search ────────────────────────────────────
                 val textUsed = isUsedInCsText(candidate.name, candidate.filePath, csTextIndex)
                 if (textUsed) {
                     LOG.info("UnusedMethods: rescued by text search: ${candidate.className}.${candidate.name}")
@@ -217,9 +228,9 @@ object CSharpAnalyzer {
                 }
 
                 // ── Confirmed unused ──────────────────────────────────────────
-                LOG.info("UnusedMethods: UNUSED ${candidate.className}.${candidate.name} " +
+                LOG.info("UnusedMethods: UNUSED [${candidate.kind}] ${candidate.className}.${candidate.name} " +
                     "[file=${candidate.filePath.substringAfterLast('/')} line=${candidate.lineNumber}]")
-                unusedMethods.add(candidate.toMethodInfo())
+                unusedSymbols.add(candidate.toMethodInfo())
             }
         }
 
@@ -233,15 +244,31 @@ object CSharpAnalyzer {
         indicator.fraction = 0.98
         indicator.text2 = ""
 
-        val result = unusedMethods.sortedWith(compareBy({ it.filePath }, { it.lineNumber }))
-        debug.appendLine("Unused found: ${result.size} of $totalMethods")
-        LOG.info("UnusedMethods: done — ${result.size} unused / $totalMethods in $where")
+        val result = unusedSymbols.sortedWith(compareBy({ it.kind.name }, { it.filePath }, { it.lineNumber }))
+        val methodCount = result.count { it.kind == SymbolKind.METHOD }
+        val propCount   = result.count { it.kind == SymbolKind.PROPERTY }
+        val classCount  = result.count { it.kind == SymbolKind.CLASS }
+        val ifaceCount  = result.count { it.kind == SymbolKind.INTERFACE }
+        val enumCount   = result.count { it.kind == SymbolKind.ENUM }
+
+        debug.appendLine("Unused found: ${result.size} of $totalSymbols")
+        LOG.info("UnusedMethods: done — ${result.size} unused / $totalSymbols in $where")
+
+        val summary = buildString {
+            append("Files: ${files.size}  |  Scanned: $totalSymbols  |  Unused: ${result.size}")
+            if (methodCount > 0) append("  (Methods: $methodCount")
+            if (propCount   > 0) append("  Props: $propCount")
+            if (classCount  > 0) append("  Classes: $classCount")
+            if (ifaceCount  > 0) append("  Ifaces: $ifaceCount")
+            if (enumCount   > 0) append("  Enums: $enumCount")
+            if (methodCount > 0 || propCount > 0 || classCount > 0 || ifaceCount > 0 || enumCount > 0) append(")")
+        }
 
         return AnalysisResult(
             methods        = result,
-            message        = "Files: ${files.size}  |  Methods scanned: $totalMethods  |  Unused: ${result.size}",
+            message        = summary,
             scannedFiles   = files.size,
-            scannedMethods = totalMethods,
+            scannedMethods = totalSymbols,
             debugInfo      = debug.toString()
         )
     }
@@ -260,7 +287,6 @@ object CSharpAnalyzer {
         }
 
         ReadAction.run<Exception> { collectMarkupRecursive(baseDir, exts, result, seen) }
-        LOG.info("UnusedMethods: found ${result.size} markup files")
         return result
     }
 
@@ -292,33 +318,15 @@ object CSharpAnalyzer {
         return result
     }
 
-    /**
-     * True if the method name appears in markup (razor/cshtml/xaml) as any kind of reference.
-     *
-     * Covers:
-     *   OnValidSubmit="OnSubmitAsync"                        — direct attribute value
-     *   @onclick="_ref!.ResetSettings"                       — method group via field
-     *   nameof(NotificationsController.SwitchOffConfiguration) — nameof expression
-     *   @MethodName(  or  ="@MethodName"                     — Blazor inline call
-     *
-     * Pattern: right boundary (?!\w) prevents "ResetSettingsAll" from matching "ResetSettings".
-     * Left side: we do NOT restrict — the name may be preceded by dot (.ResetSettings),
-     * quote, equals, space, or exclamation (!.ResetSettings for null-forgiving operator).
-     */
-    private fun isUsedInMarkup(methodName: String, markupContent: Map<String, String>): Boolean {
-        // Right-boundary only: methodName not followed by a word character
-        val pattern = Regex("""${Regex.escape(methodName)}(?!\w)""")
+    private fun isUsedInMarkup(name: String, markupContent: Map<String, String>): Boolean {
+        val pattern = Regex("""${Regex.escape(name)}(?!\w)""")
         for (content in markupContent.values) {
-            if (!content.contains(methodName)) continue   // fast pre-check
+            if (!content.contains(name)) continue
             if (pattern.containsMatchIn(content)) return true
         }
         return false
     }
 
-    /**
-     * Build a text index of all .cs files.
-     * Memory estimate: 1670 files × ~5KB avg ≈ 8MB — acceptable.
-     */
     private fun buildCsTextIndex(
         allCsFiles: List<VirtualFile>,
         @Suppress("UNUSED_PARAMETER") declarationFiles: List<VirtualFile>
@@ -333,43 +341,19 @@ object CSharpAnalyzer {
         return result
     }
 
-    /**
-     * True if [methodName] is used (called/referenced) anywhere in the C# codebase.
-     *
-     * Handles cases ReferencesSearch misses:
-     *   _geconService.CreateOrUpdateRequestAsync(model) — call via field/interface
-     *   GetError(arg)                                   — generic method call
-     *   nameof(MethodName)                              — nameof expression
-     *   handler += MethodName                           — delegate assignment
-     *
-     * IMPORTANT: The lookbehind must NOT exclude dot, because the most common
-     * call pattern is `object.MethodName(`. We only exclude word chars (\w)
-     * on the left to avoid matching "SomeOtherCreateOrUpdateRequestAsync".
-     * On the right we exclude \w to avoid "CreateOrUpdateRequestAsyncInternal".
-     *
-     * False-positive protection:
-     *   - Right boundary (?!\w): "GetError" won't match "GetErrorCount"
-     *   - Short names (≤5 chars): require call/generic syntax Name( or Name<
-     *   - Declaring file: require ≥2 occurrences (declaration itself + one usage)
-     */
     private fun isUsedInCsText(
-        methodName: String,
+        name: String,
         declaringFilePath: String,
         csIndex: Map<String, String>
     ): Boolean {
-        // Left boundary: not preceded by a word char (letter/digit/_)
-        // Dot is allowed on the left — that's the normal call pattern: obj.Method(
-        // Right boundary: not followed by a word char
-        val broadPattern  = Regex("""(?<!\w)${Regex.escape(methodName)}(?!\w)""")
-        // For short names additionally require ( or < immediately after (with optional spaces)
-        val strictPattern = Regex("""(?<!\w)${Regex.escape(methodName)}\s*[(<]""")
-        val pattern = if (methodName.length <= 5) strictPattern else broadPattern
+        val broadPattern  = Regex("""(?<!\w)${Regex.escape(name)}(?!\w)""")
+        val strictPattern = Regex("""(?<!\w)${Regex.escape(name)}\s*[(<]""")
+        val pattern = if (name.length <= 5) strictPattern else broadPattern
 
         for ((path, content) in csIndex) {
-            if (!content.contains(methodName)) continue   // fast pre-filter
+            if (!content.contains(name)) continue
             val matches = pattern.findAll(content).count()
             if (path == declaringFilePath) {
-                // Declaration line itself = 1 hit; need ≥1 additional usage
                 if (matches >= 2) return true
             } else {
                 if (matches >= 1) return true
@@ -378,18 +362,17 @@ object CSharpAnalyzer {
         return false
     }
 
-    // ── PSI dump (diagnostic) ─────────────────────────────────────────────────
+    // ── PSI dump ──────────────────────────────────────────────────────────────
 
     private fun dumpPsiTree(psiFile: PsiFile, out: StringBuilder) {
         out.appendLine("=== PSI dump: ${psiFile.name} ===")
-        LOG.info("UnusedMethods: === PSI dump for ${psiFile.name} ===")
         val seen = mutableSetOf<String>()
         walkPsi(psiFile) { el ->
             val simple = el.javaClass.simpleName
             if (seen.add(simple)) {
                 val nameIF   = (el as? PsiNamedElement)?.name ?: ""
                 val nameRefl = try { el.javaClass.getMethod("getName").invoke(el) as? String ?: "" } catch (_: Exception) { "" }
-                val nameRx   = if (isMethodLike(simple)) extractNameFromText(el.text) ?: "" else ""
+                val nameRx   = symbolKindFor(simple)?.let { extractSymbolName(el, it) } ?: ""
                 val text     = el.text.take(60).replace('\n', ' ')
                 LOG.info("UnusedMethods PSI TYPE: $simple | nameIF='$nameIF' | nameREFL='$nameRefl' | nameREGEX='$nameRx' | text='$text'")
                 out.appendLine("  $simple | nameIF='$nameIF' | nameREFL='$nameRefl' | nameREGEX='$nameRx'")
@@ -406,8 +389,22 @@ object CSharpAnalyzer {
 
     // ── Name extraction ───────────────────────────────────────────────────────
 
-    private fun extractMethodName(element: PsiElement): String? {
-        // Tier 1: PsiNamedElement interface
+    // Matches property/field declarations: "public int Age { get; set; }" → "Age"
+    // Also matches: "public string Name => ...;" → "Name"
+    // Pattern: modifiers + type + identifier, terminated by { or => or ;
+    private val PROPERTY_NAME_REGEX = Regex(
+        """^[\s]*(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|new|readonly)\s+)+""" +
+        """(?:[\w<>\[\],.\s?]+?\s+)""" +
+        """(\w+)\s*(?:\{|=>|;)"""
+    )
+
+    // Matches class/interface/enum/struct declarations: "public class Foo" → "Foo"
+    private val TYPE_DECL_NAME_REGEX = Regex(
+        """(?:class|interface|enum|struct|record)\s+(\w+)"""
+    )
+
+    private fun extractSymbolName(element: PsiElement, kind: SymbolKind): String? {
+        // Tier 1: PsiNamedElement (works for methods in Rider)
         if (element is PsiNamedElement) {
             val name = element.name
             if (!name.isNullOrBlank() && name.length > 1 && name !in KEYWORDS) return name
@@ -417,8 +414,40 @@ object CSharpAnalyzer {
             val name = element.javaClass.getMethod("getName").invoke(element) as? String
             if (!name.isNullOrBlank() && name.length > 1 && name !in KEYWORDS) return name
         } catch (_: Exception) { }
-        // Tier 3: regex on element text (primary path for Rider C# PSI)
-        return extractNameFromText(element.text)
+        // Tier 3: regex — use kind-specific pattern
+        return when (kind) {
+            SymbolKind.PROPERTY              -> extractPropertyName(element.text)
+            SymbolKind.CLASS,
+            SymbolKind.INTERFACE,
+            SymbolKind.ENUM                  -> extractTypeDeclName(element.text)
+            SymbolKind.METHOD                -> extractNameFromText(element.text)
+        }
+    }
+
+    // Keep old name for call sites that don't have kind context
+    private fun extractMethodName(element: PsiElement): String? = extractSymbolName(element, SymbolKind.METHOD)
+
+    private fun extractPropertyName(text: String): String? {
+        val firstLine = text.lineSequence().first().trim()
+        PROPERTY_NAME_REGEX.find(firstLine)?.let {
+            val n = it.groupValues[1]
+            if (n !in KEYWORDS) return n
+        }
+        // Fallback: last capitalized word before { or => on the first line
+        val beforeBrace = firstLine.substringBefore("{").substringBefore("=>").trim()
+        val lastWord = beforeBrace.split(Regex("\\s+")).lastOrNull()
+        if (!lastWord.isNullOrBlank() && lastWord !in KEYWORDS && lastWord.first().isUpperCase()) return lastWord
+        return null
+    }
+
+    private fun extractTypeDeclName(text: String): String? {
+        // Search first 3 lines (class body can be large)
+        val head = text.lineSequence().take(3).joinToString(" ")
+        TYPE_DECL_NAME_REGEX.find(head)?.let {
+            val n = it.groupValues[1]
+            if (n !in KEYWORDS) return n
+        }
+        return null
     }
 
     private fun extractNameFromText(text: String): String? {
@@ -427,7 +456,6 @@ object CSharpAnalyzer {
             val n = it.groupValues[1]
             if (n !in KEYWORDS) return n
         }
-        // Fallback: last capitalized word before (
         val matches = METHOD_NAME_FALLBACK.findAll(firstLine).toList()
         for (m in matches.reversed()) {
             val candidate = m.groupValues[1]
@@ -438,12 +466,12 @@ object CSharpAnalyzer {
         return null
     }
 
-    // ── PSI method collector ──────────────────────────────────────────────────
+    // ── PSI symbol collector ──────────────────────────────────────────────────
 
-    private fun collectMethodElements(
+    private fun collectSymbolElements(
         psiFile: PsiFile,
         settings: UnusedMethodsSettings,
-        out: CopyOnWriteArrayList<CsMethodElement>
+        out: CopyOnWriteArrayList<CsSymbolElement>
     ) {
         if (psiFile.name.endsWith(".Designer.cs", ignoreCase = true) ||
             psiFile.name.endsWith(".g.cs",        ignoreCase = true) ||
@@ -453,33 +481,47 @@ object CSharpAnalyzer {
 
         walkPsi(psiFile) { element ->
             val typeName = element.javaClass.simpleName
-            if (!isMethodLike(typeName)) return@walkPsi
+            val kind = symbolKindFor(typeName) ?: return@walkPsi
 
-            // Always skip destructors and constructors
-            // Constructors are invoked via `new ClassName()` — ReferencesSearch won't
-            // find those as references to the constructor PSI element in Rider.
-            if (typeName.contains("Destructor")) return@walkPsi
-            if (typeName.contains("Constructor")) return@walkPsi
+            // Skip unwanted kinds based on settings
+            when (kind) {
+                SymbolKind.PROPERTY  -> if (!settings.analyzeProperties) return@walkPsi
+                SymbolKind.CLASS     -> if (!settings.analyzeClasses)    return@walkPsi
+                SymbolKind.INTERFACE -> if (!settings.analyzeInterfaces) return@walkPsi
+                SymbolKind.ENUM      -> if (!settings.analyzeEnums)      return@walkPsi
+                SymbolKind.METHOD    -> { /* always collected */ }
+            }
 
-            val name = extractMethodName(element) ?: return@walkPsi
+            // Method-specific skips
+            if (kind == SymbolKind.METHOD) {
+                if (typeName.contains("Destructor"))  return@walkPsi
+                if (typeName.contains("Constructor")) return@walkPsi
+            }
+
+            val name = extractSymbolName(element, kind) ?: return@walkPsi
             if (name.isBlank() || name.length <= 1) return@walkPsi
             if (name in KEYWORDS) return@walkPsi
             if (excluded.any { name.equals(it, ignoreCase = true) }) return@walkPsi
 
             val isOverride = isOverrideMethod(element)
-            if (settings.excludeOverrides && isOverride) return@walkPsi
+            if (kind == SymbolKind.METHOD && settings.excludeOverrides && isOverride) return@walkPsi
 
             val isPrivate = isPrivateAccess(element)
             if (settings.excludePrivate && isPrivate) return@walkPsi
 
-            if (settings.excludeTests && isTestMethod(element)) return@walkPsi
-            if (isObsolete(element)) return@walkPsi
-            if (hasImplicitUseAttribute(element)) return@walkPsi
+            if (kind == SymbolKind.METHOD) {
+                if (settings.excludeTests && isTestMethod(element)) return@walkPsi
+                if (isObsolete(element)) return@walkPsi
+                if (hasImplicitUseAttribute(element)) return@walkPsi
+            }
 
             val isStatic  = isStaticMethod(element)
-            val className = findClassName(element)
+            val className = when (kind) {
+                SymbolKind.CLASS, SymbolKind.INTERFACE, SymbolKind.ENUM -> ""
+                else -> findClassName(element)
+            }
 
-            out.add(CsMethodElement(
+            out.add(CsSymbolElement(
                 element     = element,
                 name        = name,
                 className   = className,
@@ -489,42 +531,21 @@ object CSharpAnalyzer {
                 isOverride  = isOverride,
                 isStatic    = isStatic,
                 signature   = element.text.lineSequence().first().trim().take(100),
-                psiTypeName = typeName
+                psiTypeName = typeName,
+                kind        = kind
             ))
         }
     }
 
     // ── PSI helpers ───────────────────────────────────────────────────────────
 
-    private val METHOD_PSI_TYPES = setOf(
-        "CSharpMethodDeclaration",
-        "CSharpMethodDeclarationImpl",
-        "CSharpConstructorDeclaration",
-        "CSharpConstructorDeclarationImpl",
-        "CSharpDestructorDeclaration",
-        "CSharpDestructorDeclarationImpl"
-    )
-
-    private fun isMethodLike(typeName: String) = typeName in METHOD_PSI_TYPES
-
     private val CLASS_PSI_KEYWORDS = setOf("class", "struct", "interface", "record", "enum")
 
-    /**
-     * Walk parent chain to find the containing class/struct/record name.
-     *
-     * Rider PSI class nodes don't implement PsiNamedElement and getName() returns null,
-     * so we rely on Tier 3: regex on the node's own text.
-     *
-     * Key fix: cur.text for a class body starts with `{` after the signature,
-     * so we must look at the PARENT of the class node to get the full "class Foo {" line,
-     * or use the first line of the class body's parent text.
-     * We try both the node itself and its parent to find the class keyword + name.
-     */
     private fun findClassName(element: PsiElement): String {
         val classNameRegex = Regex("""(?:class|struct|record|interface|enum)\s+(\w+)""")
 
         var cur = element.parent
-        val parentChain = mutableListOf<String>() // for diagnostics
+        val parentChain = mutableListOf<String>()
 
         while (cur != null) {
             val simpleName = cur.javaClass.simpleName
@@ -532,10 +553,6 @@ object CSharpAnalyzer {
 
             val sn = simpleName.lowercase()
 
-            // Match any PSI node whose type suggests it's a class/struct/record container.
-            // We deliberately do NOT require "declaration" in the name — Rider uses
-            // CSharpDummyDeclaration for the outer wrapper that contains both attributes
-            // and the actual class body. The real class PSI type name varies.
             val isClassLike = CLASS_PSI_KEYWORDS.any { sn.contains(it) }
                 && !sn.contains("namespace")
                 && !sn.contains("parameter")
@@ -543,24 +560,20 @@ object CSharpAnalyzer {
                 && !sn.contains("method")
 
             if (isClassLike) {
-                // Tier 1: PsiNamedElement
                 if (cur is PsiNamedElement) {
                     val n = cur.name
                     if (!n.isNullOrBlank()) return n
                 }
-                // Tier 2: reflection getName()
                 try {
                     val n = cur.javaClass.getMethod("getName").invoke(cur) as? String
                     if (!n.isNullOrBlank()) return n
                 } catch (_: Exception) { }
 
-                // Tier 3a: regex on node's own first 400 chars
                 val selfText = try { cur.text.take(400) } catch (_: Exception) { "" }
                 classNameRegex.find(selfText)?.groupValues?.get(1)
                     ?.takeIf { it.isNotBlank() }
                     ?.let { return it }
 
-                // Tier 3b: regex on parent's text (catches body-only nodes starting with {)
                 val parentText = try { cur.parent?.text?.take(600) } catch (_: Exception) { null }
                 if (parentText != null) {
                     classNameRegex.find(parentText)?.groupValues?.get(1)
@@ -569,8 +582,6 @@ object CSharpAnalyzer {
                 }
             }
 
-            // Always try regex on every node's text as a last resort —
-            // even if isClassLike is false, the parent might have the class keyword
             if (!sn.contains("file") && !sn.contains("namespace") && !sn.contains("using")) {
                 val text = try { cur.text.take(200) } catch (_: Exception) { "" }
                 if (text.contains("class ") || text.contains("struct ") || text.contains("record ")) {
@@ -583,7 +594,6 @@ object CSharpAnalyzer {
             cur = cur.parent
         }
 
-        // Log the full parent chain when class name not found — helps diagnose Unknown
         LOG.warn("UnusedMethods: findClassName Unknown for method in chain: ${parentChain.takeLast(8).joinToString(" → ")}")
         return "Unknown"
     }
@@ -612,10 +622,6 @@ object CSharpAnalyzer {
     private fun isObsolete(element: PsiElement): Boolean =
         buildAttributeContext(element).contains("[Obsolete", ignoreCase = true)
 
-    /**
-     * Skip methods with attributes implying implicit/framework usage:
-     * API controllers, DI injected, Blazor parameters, JSInterop, etc.
-     */
     private fun hasImplicitUseAttribute(element: PsiElement): Boolean {
         val ctx = buildAttributeContext(element)
         return IMPLICIT_USE_ATTRIBUTES.any { ctx.contains("[$it") }
@@ -656,36 +662,25 @@ object CSharpAnalyzer {
 
         if (root != null) {
             ReadAction.run<Exception> { collectRecursive(root, result, seen, setOf("cs")) }
-            LOG.info("UnusedMethods: directory scan '${root.path}' → ${result.size} files")
             return result
         }
 
-        // Strategy 1: IntelliJ content roots (may return 0 for Rider — known issue)
         ReadAction.run<Exception> {
             val roots = ProjectRootManager.getInstance(project).contentRoots
-            LOG.info("UnusedMethods: contentRoots count = ${roots.size}, paths=${roots.map{it.path}}")
             roots.forEach { collectRecursive(it, result, seen, setOf("cs")) }
         }
-        LOG.info("UnusedMethods: after contentRoots: ${result.size} files")
 
-        // Strategy 2: project.basePath recursive walk
         val basePath = project.basePath
-        LOG.info("UnusedMethods: basePath = $basePath")
         if (basePath != null) {
             val baseDir = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
                 .refreshAndFindFileByPath(basePath)
             if (baseDir != null) {
                 ReadAction.run<Exception> { collectRecursive(baseDir, result, seen, setOf("cs")) }
-                LOG.info("UnusedMethods: after basePath scan: ${result.size} files")
             }
         }
 
-        // Strategy 3: scan for .sln file and find ALL referenced .csproj directories.
-        // This catches projects that live outside basePath (e.g. shared libraries,
-        // helper projects in sibling folders referenced via relative path in .sln).
         if (basePath != null) {
             val extraDirs = findProjectDirsFromSln(basePath)
-            LOG.info("UnusedMethods: SLN-referenced project dirs: ${extraDirs.size}")
             for (dir in extraDirs) {
                 val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
                     .refreshAndFindFileByPath(dir)
@@ -693,32 +688,21 @@ object CSharpAnalyzer {
                     ReadAction.run<Exception> { collectRecursive(vf, result, seen, setOf("cs")) }
                 }
             }
-            LOG.info("UnusedMethods: after SLN project scan: ${result.size} files")
         }
 
         return result.distinctBy { it.path }
     }
 
-    /**
-     * Parse .sln file in [basePath] (or its parent) to find all referenced .csproj
-     * directories — including those outside basePath (relative paths like ../Helpers/...).
-     * Returns absolute directory paths for each project.
-     */
     private fun findProjectDirsFromSln(basePath: String): List<String> {
         val result = mutableListOf<String>()
         val base = java.io.File(basePath)
 
-        // Find .sln in basePath or one level up (some solutions have sln in parent)
         val slnFile = sequenceOf(base, base.parentFile)
             .filterNotNull()
             .flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
             .firstOrNull { it.extension.equals("sln", ignoreCase = true) }
             ?: return result
 
-        LOG.info("UnusedMethods: found SLN: ${slnFile.path}")
-
-        // SLN project lines look like:
-        // Project("{...}") = "ProjectName", "relative\path\To.csproj", "{GUID}"
         val projectLineRegex = Regex("""Project\("[^"]*"\)\s*=\s*"[^"]*",\s*"([^"]+\.csproj)"""")
         try {
             slnFile.forEachLine { line ->
@@ -756,6 +740,26 @@ object CSharpAnalyzer {
 
     // ── Data ──────────────────────────────────────────────────────────────────
 
+    data class CsSymbolElement(
+        val element: PsiElement,
+        val name: String,
+        val className: String,
+        val filePath: String,
+        val lineNumber: Int,
+        val isPrivate: Boolean,
+        val isOverride: Boolean,
+        val isStatic: Boolean,
+        val signature: String,
+        val psiTypeName: String,
+        val kind: SymbolKind
+    ) {
+        fun toMethodInfo() = MethodInfo(
+            name, signature, className, filePath, lineNumber, isPrivate, isOverride, isStatic, kind
+        )
+    }
+
+    // Kept for backward compat — used by some callers
+    @Deprecated("Use CsSymbolElement", ReplaceWith("CsSymbolElement"))
     data class CsMethodElement(
         val element: PsiElement,
         val name: String,
